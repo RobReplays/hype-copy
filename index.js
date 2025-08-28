@@ -1,5 +1,6 @@
 require('dotenv').config();
 const HyperliquidBot = require('./src/HyperliquidBot');
+const http = require('http');
 
 // Configuration from environment variables
 const config = {
@@ -83,19 +84,33 @@ async function main() {
       gracefulShutdown('unhandledRejection');
     });
 
+    // Create a simple HTTP server to keep Render happy
+    const server = http.createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'healthy',
+          uptime: process.uptime(),
+          isRunning: bot.isRunning,
+          timestamp: new Date().toISOString()
+        }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Hyperliquid Copy Trading Bot is running!\n\nFor health check: /health');
+      }
+    });
+
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`🌐 Health server running on port ${PORT}`);
+    });
+
     // Start the bot
     await bot.start();
     
     // Keep the process alive
     console.log('🟢 Bot is running. Press Ctrl+C to stop.');
-    
-    // Prevent the process from exiting - multiple methods
-    process.stdin.resume();
-    
-    // Also set a keep-alive interval
-    setInterval(() => {
-      // This prevents Node from exiting
-    }, 1 << 30); // Very long interval
+    console.log(`🔗 Health check available at: http://localhost:${PORT}/health`);
     
   } catch (error) {
     console.error('❌ Failed to start bot:', error);

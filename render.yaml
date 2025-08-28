@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: hype-copy-bot
     runtime: node
     repo: # Leave blank if deploying manually
