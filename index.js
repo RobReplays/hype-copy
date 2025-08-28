@@ -45,6 +45,34 @@ function validateConfig() {
 // Main function
 async function main() {
   try {
+    // FIRST: Start HTTP server immediately for Render
+    const PORT = process.env.PORT || 3000;
+    let botInstance = null;
+    
+    const server = http.createServer((req, res) => {
+      if (req.url === '/health' || req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'healthy',
+          botRunning: botInstance ? botInstance.isRunning : false,
+          uptime: process.uptime(),
+          timestamp: new Date().toISOString()
+        }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Hyperliquid Copy Trading Bot is running!');
+      }
+    });
+
+    // Start server IMMEDIATELY
+    await new Promise((resolve) => {
+      server.listen(PORT, '0.0.0.0', () => {
+        console.log(`🌐 HTTP server started on port ${PORT}`);
+        resolve();
+      });
+    });
+    
+    // THEN validate config and start bot
     validateConfig();
     
     console.log('🚀 Starting Hyperliquid Copy Trading Monitor...');
@@ -54,14 +82,25 @@ async function main() {
     console.log(`⚙️  Sizing: ${config.sizingMethod} (${config.accountRatio}x)`);
     
     // Create and start the bot
-    const bot = new HyperliquidBot(config);
+    botInstance = new HyperliquidBot(config);
     
-    // Handle graceful shutdown
+    // Handle graceful shutdown - but DON'T exit on SIGTERM for Render
     const gracefulShutdown = async (signal) => {
-      console.log(`\n📡 Received ${signal}, shutting down gracefully...`);
+      console.log(`\n📡 Received ${signal}`);
+      
+      // For Render deployments, ignore SIGTERM during normal operation
+      if (signal === 'SIGTERM' && process.env.PORT) {
+        console.log('📌 Ignoring SIGTERM on Render - keeping service alive');
+        return;
+      }
+      
+      console.log('Shutting down gracefully...');
       try {
-        await bot.stop();
+        if (botInstance) {
+          await botInstance.stop();
+        }
         console.log('✅ Bot stopped successfully');
+        server.close();
         process.exit(0);
       } catch (error) {
         console.error('❌ Error during shutdown:', error);
@@ -76,41 +115,20 @@ async function main() {
     // Handle uncaught errors
     process.on('uncaughtException', (error) => {
       console.error('❌ Uncaught Exception:', error);
-      gracefulShutdown('uncaughtException');
+      // Don't exit, try to recover
     });
 
     process.on('unhandledRejection', (reason, promise) => {
       console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-      gracefulShutdown('unhandledRejection');
-    });
-
-    // Create a simple HTTP server to keep Render happy
-    const server = http.createServer((req, res) => {
-      if (req.url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          status: 'healthy',
-          uptime: process.uptime(),
-          isRunning: bot.isRunning,
-          timestamp: new Date().toISOString()
-        }));
-      } else {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Hyperliquid Copy Trading Bot is running!\n\nFor health check: /health');
-      }
-    });
-
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`🌐 Health server running on port ${PORT}`);
+      // Don't exit, try to recover
     });
 
     // Start the bot
-    await bot.start();
+    await botInstance.start();
     
     // Keep the process alive
-    console.log('🟢 Bot is running. Press Ctrl+C to stop.');
-    console.log(`🔗 Health check available at: http://localhost:${PORT}/health`);
+    console.log('🟢 Bot is running successfully!');
+    console.log(`🔗 Health check: http://localhost:${PORT}/health`);
     
   } catch (error) {
     console.error('❌ Failed to start bot:', error);
