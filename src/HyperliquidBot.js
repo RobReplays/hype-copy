@@ -1,4 +1,7 @@
 const axios = require('axios');
+const { spawn } = require('child_process');
+const path = require('path');
+const { ethers } = require('ethers');
 const TelegramNotifier = require('./TelegramNotifier');
 
 class HyperliquidBot {
@@ -186,14 +189,17 @@ class HyperliquidBot {
     const isLong = size > 0;
     const pnl = parseFloat(position.position.unrealizedPnl || 0);
     const entryPrice = parseFloat(position.position.entryPx || 0);
+    const markPrice = parseFloat(position.position.markPx || 0);
 
     console.log(`🆕 New position: ${coin} ${isLong ? 'LONG' : 'SHORT'} ${Math.abs(size)}`);
 
-    const message = `🆕 NEW POSITION OPENED\n\n` +
+    const message = `🆕 SIGNAL PROVIDER OPENED POSITION\n\n` +
       `💰 Coin: ${coin}\n` +
       `📊 Side: ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
       `📏 Size: ${Math.abs(size).toFixed(4)}\n` +
       `💵 Entry: $${entryPrice.toFixed(4)}\n` +
+      `📍 Current: $${markPrice.toFixed(4)}\n` +
+      `📊 Position Value: $${(Math.abs(size) * markPrice).toFixed(2)}\n` +
       `📈 Unrealized PnL: $${pnl.toFixed(2)}\n` +
       `⏰ Time: ${new Date().toLocaleString()}`;
 
@@ -240,7 +246,105 @@ class HyperliquidBot {
     await this.sendCopyTradeInfo(coin, -size, 'CLOSE');
   }
 
+  async executeTrade(coin, signalSize, action) {
+    console.log(`🔄 Executing trade: ${action} ${coin} (signal: ${signalSize})`);
+    
+    try {
+      // Call Python trade executor
+      const pythonScript = path.join(__dirname, 'trade_executor.py');
+      const pythonProcess = spawn('python3', [
+        pythonScript,
+        coin,
+        signalSize.toString(),
+        action
+      ]);
+
+      let output = '';
+      let errorOutput = '';
+
+      pythonProcess.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      return new Promise((resolve) => {
+        pythonProcess.on('close', (code) => {
+          try {
+            const result = JSON.parse(output);
+            if (code === 0 || result.success) {
+              console.log('✅ Trade executed successfully:', result);
+              resolve({ success: true, ...result });
+            } else {
+              console.error('❌ Trade failed:', result);
+              resolve({ success: false, ...result });
+            }
+          } catch (parseError) {
+            console.error('❌ Failed to parse trade result:', output, errorOutput);
+            resolve({ 
+              success: false, 
+              error: `Parse error: ${parseError.message}`,
+              raw_output: output,
+              raw_error: errorOutput 
+            });
+          }
+        });
+      });
+    } catch (error) {
+      console.error('❌ Error executing trade:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
   async sendCopyTradeInfo(coin, signalSize, action) {
+    // First try to execute the trade automatically
+    const executeTradesAutomatically = process.env.AUTO_EXECUTE_TRADES === 'true';
+    
+    if (executeTradesAutomatically) {
+      console.log('🤖 Auto-executing trade...');
+      const tradeResult = await this.executeTrade(coin, signalSize, action);
+      
+      if (tradeResult.success) {
+        // Send success message with trade details
+        const message = `✅ TRADE EXECUTED AUTOMATICALLY\n\n` +
+          `🔧 Action: ${action}\n` +
+          `💰 Coin: ${coin}\n` +
+          `📊 Signal Size: ${signalSize.toFixed(4)}\n` +
+          `📊 Executed Size: ${parseFloat(tradeResult.filled_size || 0).toFixed(4)}\n` +
+          `💵 Fill Price: $${parseFloat(tradeResult.avg_price || 0).toFixed(4)}\n` +
+          `💰 Order Value: $${parseFloat(tradeResult.order_value || 0).toFixed(2)}\n` +
+          `🆔 Order ID: ${tradeResult.order_id || 'N/A'}\n` +
+          `⏰ Time: ${new Date().toLocaleString()}`;
+        
+        await this.telegram.sendMessage(message);
+        
+        // Wait a moment for position to update, then send YOUR position breakdown
+        setTimeout(async () => {
+          await this.sendMyPositionUpdate(coin);
+        }, 2000);
+        
+        return;
+      } else {
+        // Trade failed, send error and manual instructions
+        let errorMessage = `❌ AUTO-TRADE FAILED\n\n` +
+          `🔧 Action: ${action}\n` +
+          `💰 Coin: ${coin}\n` +
+          `📊 Signal Size: ${signalSize.toFixed(4)}\n` +
+          `❌ Error: ${tradeResult.error}\n\n`;
+        
+        if (tradeResult.skipped) {
+          errorMessage += `⚠️ Trade skipped (order too small)\n`;
+        } else {
+          errorMessage += `📋 Manual execution required:\n`;
+        }
+        
+        await this.telegram.sendMessage(errorMessage);
+      }
+    }
+    
+    // Send manual instructions (fallback or if auto-execute is disabled)
     const mySize = this.calculatePositionSize(signalSize);
     const currentPrice = await this.getCurrentPrice(coin);
     
@@ -258,16 +362,165 @@ class HyperliquidBot {
     await this.telegram.sendMessage(message);
   }
 
+  async sendMyPositionUpdate(specificCoin = null) {
+    console.log(`📊 Fetching your ${specificCoin || 'current'} position(s)...`);
+    
+    try {
+      // Get your wallet address from private key
+      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
+      
+      // Fetch your positions using the API
+      const response = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'clearinghouseState',
+        user: wallet.address
+      });
+
+      if (!response.data || !response.data.assetPositions) {
+        return;
+      }
+
+      const positions = response.data.assetPositions;
+      const accountValue = parseFloat(response.data.marginSummary?.accountValue || 0);
+      const withdrawable = parseFloat(response.data.withdrawable || 0);
+      
+      // If specific coin requested, only show that
+      if (specificCoin) {
+        const position = positions.find(p => p.position && p.position.coin === specificCoin);
+        
+        if (!position || parseFloat(position.position.szi) === 0) {
+          await this.telegram.sendMessage(
+            `📊 YOUR ${specificCoin} POSITION\n\n` +
+            `❌ Position closed or not found\n` +
+            `💰 Account Balance: $${accountValue.toFixed(2)}\n` +
+            `💳 Available: $${withdrawable.toFixed(2)}`
+          );
+          return;
+        }
+        
+        const size = parseFloat(position.position.szi);
+        const entryPrice = parseFloat(position.position.entryPx || 0);
+        const markPrice = parseFloat(position.position.markPx || 0);
+        const pnl = parseFloat(position.position.unrealizedPnl || 0);
+        const margin = parseFloat(position.position.marginUsed || 0);
+        
+        const message = `📊 YOUR ${specificCoin} POSITION\n\n` +
+          `📈 Status: ${size > 0 ? '🟢 LONG' : '🔴 SHORT'}\n` +
+          `📏 Size: ${Math.abs(size).toFixed(6)} ${specificCoin}\n` +
+          `💵 Entry Price: $${entryPrice.toFixed(4)}\n` +
+          `📍 Current Price: $${markPrice.toFixed(4)}\n` +
+          `📊 Position Value: $${(Math.abs(size) * markPrice).toFixed(2)}\n` +
+          `💰 Unrealized PnL: ${pnl >= 0 ? '✅' : '❌'} $${pnl.toFixed(2)}\n` +
+          `📈 Return: ${((pnl / (Math.abs(size) * entryPrice)) * 100).toFixed(2)}%\n` +
+          `💳 Margin Used: $${margin.toFixed(2)}\n\n` +
+          `💰 Account Balance: $${accountValue.toFixed(2)}\n` +
+          `💳 Available: $${withdrawable.toFixed(2)}`;
+        
+        await this.telegram.sendMessage(message);
+        
+      } else {
+        // Show all positions
+        await this.sendMyPositions();
+      }
+      
+    } catch (error) {
+      console.error('❌ Error fetching position update:', error.message);
+    }
+  }
+
+  async sendMyPositions() {
+    console.log('📊 Fetching your current positions...');
+    
+    try {
+      // Call Python script to get your positions
+      const pythonScript = path.join(__dirname, 'trade_executor.py');
+      const pythonProcess = spawn('python3', [
+        pythonScript,
+        'SOL', '0', 'OPEN', '--dry-run'  // Dummy call to initialize executor and get balance
+      ]);
+
+      let output = '';
+      pythonProcess.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      return new Promise(async (resolve) => {
+        pythonProcess.on('close', async (code) => {
+          try {
+            // Get your wallet address from private key
+            const wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
+            
+            // Fetch your positions using the API
+            const response = await axios.post('https://api.hyperliquid.xyz/info', {
+              type: 'clearinghouseState',
+              user: wallet.address
+            });
+
+            if (!response.data || !response.data.assetPositions) {
+              await this.telegram.sendMessage('📭 No positions data found for your account');
+              resolve();
+              return;
+            }
+
+            const positions = response.data.assetPositions;
+            const activePositions = positions.filter(p => p.position && parseFloat(p.position.szi) !== 0);
+            
+            if (activePositions.length === 0) {
+              const accountValue = parseFloat(response.data.marginSummary?.accountValue || 0);
+              await this.telegram.sendMessage(`📭 No active positions\n💰 Account Balance: $${accountValue.toFixed(2)}`);
+              resolve();
+              return;
+            }
+
+            // Build positions message
+            let message = `📊 YOUR POSITIONS (${activePositions.length})\n\n`;
+            let totalPnl = 0;
+            const accountValue = parseFloat(response.data.marginSummary?.accountValue || 0);
+
+            activePositions.forEach(pos => {
+              const coin = pos.position.coin;
+              const size = parseFloat(pos.position.szi);
+              const entryPrice = parseFloat(pos.position.entryPx || 0);
+              const markPrice = parseFloat(pos.position.markPx || 0);
+              const pnl = parseFloat(pos.position.unrealizedPnl || 0);
+              totalPnl += pnl;
+              
+              message += `💰 ${coin}\n`;
+              message += `   📊 ${size > 0 ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(size).toFixed(4)}\n`;
+              message += `   💵 Entry: $${entryPrice.toFixed(4)}\n`;
+              message += `   💵 Mark: $${markPrice.toFixed(4)}\n`;
+              message += `   📈 PnL: $${pnl.toFixed(2)}\n\n`;
+            });
+
+            message += `💰 Total PnL: $${totalPnl.toFixed(2)}\n`;
+            message += `💳 Account Value: $${accountValue.toFixed(2)}`;
+
+            await this.telegram.sendMessage(message);
+            resolve();
+            
+          } catch (error) {
+            console.error('❌ Error fetching your positions:', error.message);
+            await this.telegram.sendMessage(`❌ Error fetching your positions: ${error.message}`);
+            resolve();
+          }
+        });
+      });
+      
+    } catch (error) {
+      console.error('❌ Error getting positions:', error.message);
+      await this.telegram.sendMessage(`❌ Error getting positions: ${error.message}`);
+    }
+  }
+
   async sendPositionsSummary() {
     if (this.signalProviderPositions.size === 0) {
-      await this.telegram.sendMessage('📊 No active positions found');
+      await this.telegram.sendMessage('📊 No active signal provider positions found');
       return;
     }
 
     // Fetch current market prices
     const marketPrices = await this.getMarketPrices();
 
-    let message = `📊 CURRENT POSITIONS (${this.signalProviderPositions.size})\n\n`;
+    let message = `📊 SIGNAL PROVIDER POSITIONS (${this.signalProviderPositions.size})\n\n`;
     let totalPnl = 0;
 
     for (const [coin, position] of this.signalProviderPositions) {
@@ -286,8 +539,12 @@ class HyperliquidBot {
       message += `   📈 PnL: $${pnl.toFixed(2)}\n\n`;
     }
 
-    message += `💰 Total Unrealized PnL: $${totalPnl.toFixed(2)}`;
+    message += `💰 Signal Total PnL: $${totalPnl.toFixed(2)}\n\n`;
+    message += `📱 Checking your positions...`;
     await this.telegram.sendMessage(message);
+    
+    // Also send your positions
+    await this.sendMyPositions();
   }
 
   calculatePositionSize(signalSize) {
