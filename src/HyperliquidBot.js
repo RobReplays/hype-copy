@@ -243,13 +243,15 @@ class HyperliquidBot {
     for (const [coin, position] of this.signalProviderPositions) {
       const size = parseFloat(position.position.szi);
       const pnl = parseFloat(position.position.unrealizedPnl || 0);
+      const entryPrice = parseFloat(position.position.entryPx || 0);
       const markPrice = parseFloat(position.position.markPx || 0);
       
       totalPnl += pnl;
       
       message += `💰 ${coin}\n`;
       message += `   📊 ${size > 0 ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(size).toFixed(4)}\n`;
-      message += `   💵 $${markPrice.toFixed(4)}\n`;
+      message += `   💵 Entry: $${entryPrice.toFixed(4)}\n`;
+      message += `   💵 Mark: $${markPrice.toFixed(4)}\n`;
       message += `   📈 PnL: $${pnl.toFixed(2)}\n\n`;
     }
 
