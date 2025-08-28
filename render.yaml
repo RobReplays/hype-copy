@@ -4,7 +4,8 @@ services:
     runtime: node
     repo: # Leave blank if deploying manually
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: node index.js
+    autoDeploy: true
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false

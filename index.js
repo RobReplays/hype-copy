@@ -86,6 +86,12 @@ async function main() {
     // Start the bot
     await bot.start();
     
+    // Keep the process alive
+    console.log('🟢 Bot is running. Press Ctrl+C to stop.');
+    
+    // Prevent the process from exiting
+    process.stdin.resume();
+    
   } catch (error) {
     console.error('❌ Failed to start bot:', error);
     process.exit(1);
