@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: hype-copy-bot
+    runtime: node
+    repo: # Leave blank if deploying manually
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: SIGNAL_PROVIDER_ADDRESS
+        sync: false
+      - key: SIZING_METHOD
+        sync: false
+      - key: ACCOUNT_RATIO
+        sync: false
+      - key: MAX_POSITION_SIZE
+        sync: false
+      - key: POLL_INTERVAL
+        sync: false

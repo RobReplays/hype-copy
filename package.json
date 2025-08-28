@@ -1,0 +1,23 @@
+{
+  "name": "hype-copy",
+  "version": "1.0.0",
+  "description": "Hyperliquid copy trading bot with Telegram notifications",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "hyperliquid",
+    "copy-trading",
+    "telegram",
+    "crypto"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.11.0",
+    "dotenv": "^17.2.1"
+  }
+}
