@@ -89,8 +89,13 @@ async function main() {
     // Keep the process alive
     console.log('🟢 Bot is running. Press Ctrl+C to stop.');
     
-    // Prevent the process from exiting
+    // Prevent the process from exiting - multiple methods
     process.stdin.resume();
+    
+    // Also set a keep-alive interval
+    setInterval(() => {
+      // This prevents Node from exiting
+    }, 1 << 30); // Very long interval
     
   } catch (error) {
     console.error('❌ Failed to start bot:', error);
