@@ -113,6 +113,33 @@ class HyperliquidBot {
     }
   }
 
+  async getMarketPrices() {
+    try {
+      const response = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'metaAndAssetCtxs'
+      }, {
+        timeout: 10000,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const [meta, assetCtxs] = response.data;
+      const priceMap = new Map();
+      
+      meta.universe.forEach((asset, index) => {
+        if (assetCtxs[index]) {
+          priceMap.set(asset.name, parseFloat(assetCtxs[index].markPx || 0));
+        }
+      });
+      
+      return priceMap;
+    } catch (error) {
+      console.error('Failed to fetch market prices:', error.message);
+      return new Map();
+    }
+  }
+
   async checkForPositionChanges() {
     const currentPositions = await this.getPositions(this.config.signalProviderAddress);
     
@@ -237,6 +264,9 @@ class HyperliquidBot {
       return;
     }
 
+    // Fetch current market prices
+    const marketPrices = await this.getMarketPrices();
+
     let message = `📊 CURRENT POSITIONS (${this.signalProviderPositions.size})\n\n`;
     let totalPnl = 0;
 
@@ -244,7 +274,8 @@ class HyperliquidBot {
       const size = parseFloat(position.position.szi);
       const pnl = parseFloat(position.position.unrealizedPnl || 0);
       const entryPrice = parseFloat(position.position.entryPx || 0);
-      const markPrice = parseFloat(position.position.markPx || 0);
+      // Try to get mark price from market data, fallback to position data
+      const markPrice = marketPrices.get(coin) || parseFloat(position.position.markPx || 0);
       
       totalPnl += pnl;
       
