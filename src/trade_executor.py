@@ -12,6 +12,7 @@ from eth_account import Account
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
 from dotenv import load_dotenv
+from position_limiter import limiter
 
 class TradeExecutor:
     def __init__(self):
@@ -147,6 +148,15 @@ class TradeExecutor:
                         "error": f"Insufficient balance. Need ${order_value:.2f}, have ${balance:.2f}"
                     }
             
+            # Check position limits to prevent overexposure from scaling
+            if action_type in ["OPEN", "INCREASE"] and is_buy:
+                if not limiter.should_allow_trade(coin, order_value, self.get_account_balance()):
+                    return {
+                        "success": False,
+                        "error": f"Trade blocked by position limiter - preventing overexposure",
+                        "blocked": True
+                    }
+            
             # Execute the order (debug output goes to stderr to avoid JSON parsing issues)
             import sys
             print(f"Executing: {'BUY' if is_buy else 'SELL'} {rounded_size:.6f} {coin} @ ${current_price:.2f}", file=sys.stderr)
@@ -166,6 +176,13 @@ class TradeExecutor:
                 
                 if statuses and "filled" in statuses[0]:
                     fill_data = statuses[0]["filled"]
+                    
+                    # Record successful trade for limiting
+                    if action_type in ["OPEN", "INCREASE"]:
+                        limiter.record_trade(coin, order_value)
+                    elif action_type == "CLOSE":
+                        limiter.reset_position(coin)
+                    
                     return {
                         "success": True,
                         "filled_size": fill_data["totalSz"],
