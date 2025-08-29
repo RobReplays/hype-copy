@@ -154,18 +154,35 @@ class HyperliquidBot {
       }
     }
 
-    // Check for new or modified positions
+    // Check for new positions only (ignore modifications to prevent scaling issues)
     for (const [coin, newPosition] of currentPositionsMap) {
       const oldPosition = this.signalProviderPositions.get(coin);
 
       if (!oldPosition) {
+        // Only copy NEW positions - prevents scaling in issues
         await this.handleNewPosition(newPosition);
       } else if (this.hasPositionChanged(oldPosition, newPosition)) {
-        await this.handlePositionChange(oldPosition, newPosition);
+        // Log but don't copy position modifications 
+        const oldSize = parseFloat(oldPosition.position.szi);
+        const newSize = parseFloat(newPosition.position.szi);
+        const sizeDiff = newSize - oldSize;
+        
+        console.log(`🔄 Position modified (not copied): ${coin} ${oldSize} → ${newSize} (${sizeDiff > 0 ? '+' : ''}${sizeDiff.toFixed(4)})`);
+        
+        // Send notification but don't execute trade
+        const message = `🔄 SIGNAL PROVIDER MODIFIED POSITION\n\n` +
+          `💰 Coin: ${coin}\n` +
+          `📊 Old Size: ${oldSize.toFixed(4)}\n` +
+          `📊 New Size: ${newSize.toFixed(4)}\n` +
+          `📈 Change: ${sizeDiff > 0 ? '⬆️' : '⬇️'} ${Math.abs(sizeDiff).toFixed(4)}\n` +
+          `⚠️ Position scaling - not copied\n` +
+          `⏰ Time: ${new Date().toLocaleString()}`;
+        
+        await this.telegram.sendMessage(message);
       }
     }
 
-    // Check for closed positions
+    // Check for closed positions (still copy closes)
     for (const [coin, oldPosition] of this.signalProviderPositions) {
       if (!currentPositionsMap.has(coin)) {
         await this.handlePositionClosed(oldPosition);
