@@ -572,6 +572,16 @@ class HyperliquidBot {
 
   async getCurrentPrice(coin) {
     try {
+      // First try to get from all mids (more reliable)
+      const midsResponse = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'allMids'
+      }, { timeout: 5000 });
+      
+      if (midsResponse.data && midsResponse.data[coin]) {
+        return parseFloat(midsResponse.data[coin]).toFixed(4);
+      }
+      
+      // Fallback to l2Book if not found in mids
       const response = await axios.post('https://api.hyperliquid.xyz/info', {
         type: 'l2Book',
         coin: coin
@@ -586,7 +596,7 @@ class HyperliquidBot {
     } catch (error) {
       console.error(`Error getting price for ${coin}:`, error.message);
     }
-    return null;
+    return 'N/A';
   }
 
   async stop() {
