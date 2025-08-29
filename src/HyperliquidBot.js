@@ -303,7 +303,13 @@ class HyperliquidBot {
       return new Promise((resolve) => {
         pythonProcess.on('close', (code) => {
           try {
-            const result = JSON.parse(output);
+            // Clean output by finding the JSON part
+            const jsonMatch = output.match(/\{[\s\S]*\}$/);
+            if (!jsonMatch) {
+              throw new Error('No JSON found in output');
+            }
+            
+            const result = JSON.parse(jsonMatch[0]);
             if (code === 0 || result.success) {
               console.log('✅ Trade executed successfully:', result);
               resolve({ success: true, ...result });
