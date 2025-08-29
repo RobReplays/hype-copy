@@ -189,7 +189,14 @@ class HyperliquidBot {
     const isLong = size > 0;
     const pnl = parseFloat(position.position.unrealizedPnl || 0);
     const entryPrice = parseFloat(position.position.entryPx || 0);
-    const markPrice = parseFloat(position.position.markPx || 0);
+    
+    // Get current price properly - markPx is often 0 for new positions
+    let currentPrice = parseFloat(position.position.markPx || 0);
+    if (currentPrice === 0 || !currentPrice) {
+      // If mark price is 0, try to fetch it or use entry price
+      const fetchedPrice = await this.getCurrentPrice(coin);
+      currentPrice = fetchedPrice !== 'N/A' ? parseFloat(fetchedPrice) : entryPrice;
+    }
 
     console.log(`🆕 New position: ${coin} ${isLong ? 'LONG' : 'SHORT'} ${Math.abs(size)}`);
 
@@ -198,8 +205,8 @@ class HyperliquidBot {
       `📊 Side: ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
       `📏 Size: ${Math.abs(size).toFixed(4)}\n` +
       `💵 Entry: $${entryPrice.toFixed(4)}\n` +
-      `📍 Current: $${markPrice.toFixed(4)}\n` +
-      `📊 Position Value: $${(Math.abs(size) * markPrice).toFixed(2)}\n` +
+      `📍 Current: $${currentPrice.toFixed(4)}\n` +
+      `📊 Position Value: $${(Math.abs(size) * currentPrice).toFixed(2)}\n` +
       `📈 Unrealized PnL: $${pnl.toFixed(2)}\n` +
       `⏰ Time: ${new Date().toLocaleString()}`;
 
@@ -213,7 +220,13 @@ class HyperliquidBot {
     const newSize = parseFloat(newPos.position.szi);
     const sizeDiff = newSize - oldSize;
     const pnl = parseFloat(newPos.position.unrealizedPnl || 0);
-    const currentPrice = parseFloat(newPos.position.markPx || 0);
+    
+    // Get current price properly
+    let currentPrice = parseFloat(newPos.position.markPx || 0);
+    if (currentPrice === 0 || !currentPrice) {
+      const fetchedPrice = await this.getCurrentPrice(coin);
+      currentPrice = fetchedPrice !== 'N/A' ? parseFloat(fetchedPrice) : parseFloat(newPos.position.entryPx || 0);
+    }
 
     console.log(`🔄 Position change: ${coin} ${oldSize} → ${newSize}`);
 
