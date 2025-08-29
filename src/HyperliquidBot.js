@@ -335,7 +335,7 @@ class HyperliquidBot {
   }
 
   async sendCopyTradeInfo(coin, signalSize, action) {
-    // First try to execute the trade automatically
+    // Auto-execute trades
     const executeTradesAutomatically = process.env.AUTO_EXECUTE_TRADES === 'true';
     
     if (executeTradesAutomatically) {
@@ -361,41 +361,27 @@ class HyperliquidBot {
           await this.sendMyPositionUpdate(coin);
         }, 2000);
         
-        return;
       } else {
-        // Trade failed, send error and manual instructions
+        // Trade failed, send error only
         let errorMessage = `❌ AUTO-TRADE FAILED\n\n` +
           `🔧 Action: ${action}\n` +
           `💰 Coin: ${coin}\n` +
           `📊 Signal Size: ${signalSize.toFixed(4)}\n` +
-          `❌ Error: ${tradeResult.error}\n\n`;
+          `❌ Error: ${tradeResult.error}`;
         
         if (tradeResult.skipped) {
-          errorMessage += `⚠️ Trade skipped (order too small)\n`;
-        } else {
-          errorMessage += `📋 Manual execution required:\n`;
+          errorMessage += `\n⚠️ Trade skipped (order too small)`;
         }
         
         await this.telegram.sendMessage(errorMessage);
       }
+    } else {
+      // Auto-execute is disabled
+      await this.telegram.sendMessage(
+        `⚠️ AUTO-EXECUTION DISABLED\n\n` +
+        `Set AUTO_EXECUTE_TRADES=true to enable automatic trading`
+      );
     }
-    
-    // Send manual instructions (fallback or if auto-execute is disabled)
-    const mySize = this.calculatePositionSize(signalSize);
-    const currentPrice = await this.getCurrentPrice(coin);
-    
-    const message = `📋 COPY TRADE INFO\n\n` +
-      `🔧 Action: ${action}\n` +
-      `💰 Coin: ${coin}\n` +
-      `📊 Signal Size: ${signalSize.toFixed(4)}\n` +
-      `📊 Your Size: ${mySize.toFixed(4)}\n` +
-      `💵 Current Price: $${currentPrice || 'N/A'}\n` +
-      `📐 Method: ${this.config.sizingMethod}\n` +
-      `📊 Ratio: ${this.config.accountRatio}x\n\n` +
-      `💡 Manual Command:\n` +
-      `${mySize > 0 ? 'BUY' : 'SELL'} ${Math.abs(mySize).toFixed(4)} ${coin}`;
-
-    await this.telegram.sendMessage(message);
   }
 
   async sendMyPositionUpdate(specificCoin = null) {
