@@ -12,7 +12,7 @@ class HyperliquidBot {
     this.telegram = new TelegramNotifier(config.telegram);
     this.pollInterval = null;
     this.errorCount = 0;
-    this.maxErrors = 10; // Stop after too many consecutive errors
+    this.maxErrors = 15; // Stop after too many consecutive errors (increased for API outages)
   }
 
   async start() {
