@@ -154,31 +154,16 @@ class HyperliquidBot {
       }
     }
 
-    // Check for new positions only (ignore modifications to prevent scaling issues)
+    // Check for new positions and modifications
     for (const [coin, newPosition] of currentPositionsMap) {
       const oldPosition = this.signalProviderPositions.get(coin);
 
       if (!oldPosition) {
-        // Only copy NEW positions - prevents scaling in issues
+        // Copy NEW positions
         await this.handleNewPosition(newPosition);
       } else if (this.hasPositionChanged(oldPosition, newPosition)) {
-        // Log but don't copy position modifications 
-        const oldSize = parseFloat(oldPosition.position.szi);
-        const newSize = parseFloat(newPosition.position.szi);
-        const sizeDiff = newSize - oldSize;
-        
-        console.log(`🔄 Position modified (not copied): ${coin} ${oldSize} → ${newSize} (${sizeDiff > 0 ? '+' : ''}${sizeDiff.toFixed(4)})`);
-        
-        // Send notification but don't execute trade
-        const message = `🔄 SIGNAL PROVIDER MODIFIED POSITION\n\n` +
-          `💰 Coin: ${coin}\n` +
-          `📊 Old Size: ${oldSize.toFixed(4)}\n` +
-          `📊 New Size: ${newSize.toFixed(4)}\n` +
-          `📈 Change: ${sizeDiff > 0 ? '⬆️' : '⬇️'} ${Math.abs(sizeDiff).toFixed(4)}\n` +
-          `⚠️ Position scaling - not copied\n` +
-          `⏰ Time: ${new Date().toLocaleString()}`;
-        
-        await this.telegram.sendMessage(message);
+        // Smart modification tracking - copy by percentage change
+        await this.handlePositionModification(oldPosition, newPosition);
       }
     }
 
@@ -229,6 +214,86 @@ class HyperliquidBot {
 
     await this.telegram.sendMessage(message);
     await this.sendCopyTradeInfo(coin, size, 'OPEN');
+  }
+
+  async handlePositionModification(oldPos, newPos) {
+    const coin = newPos.position.coin;
+    const oldSize = parseFloat(oldPos.position.szi);
+    const newSize = parseFloat(newPos.position.szi);
+    const percentageChange = ((newSize - oldSize) / Math.abs(oldSize)) * 100;
+    const isIncrease = newSize > oldSize;
+    
+    // Only copy significant changes (>10% change)
+    const significantChange = Math.abs(percentageChange) > 10;
+    
+    console.log(`🔄 Position modified: ${coin} ${oldSize} → ${newSize} (${percentageChange.toFixed(1)}% change)`);
+    
+    let message = `🔄 SIGNAL PROVIDER MODIFIED POSITION\n\n` +
+      `💰 Coin: ${coin}\n` +
+      `📊 Old Size: ${oldSize.toFixed(4)}\n` +
+      `📊 New Size: ${newSize.toFixed(4)}\n` +
+      `📈 Change: ${percentageChange > 0 ? '⬆️' : '⬇️'} ${Math.abs(percentageChange).toFixed(1)}%\n`;
+    
+    if (significantChange) {
+      message += `\n✅ Copying modification (>${10}% change)\n`;
+      message += `⏰ Time: ${new Date().toLocaleString()}`;
+      await this.telegram.sendMessage(message);
+      
+      // Execute proportional modification
+      await this.executeProportionalModification(coin, percentageChange, isIncrease);
+    } else {
+      message += `⚠️ Minor change - not copied (<10%)\n`;
+      message += `⏰ Time: ${new Date().toLocaleString()}`;
+      await this.telegram.sendMessage(message);
+    }
+  }
+
+  async executeProportionalModification(coin, percentageChange, isIncrease) {
+    try {
+      // Get our current position first
+      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
+      const response = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'clearinghouseState',
+        user: wallet.address
+      });
+      
+      const myPositions = response.data.assetPositions;
+      const myPosition = myPositions.find(p => p.position && p.position.coin === coin);
+      
+      if (!myPosition || parseFloat(myPosition.position.szi) === 0) {
+        console.log(`❌ No position to modify for ${coin}`);
+        return;
+      }
+      
+      const myCurrentSize = Math.abs(parseFloat(myPosition.position.szi));
+      const modificationSize = Math.abs(myCurrentSize * (percentageChange / 100));
+      
+      console.log(`📊 Modifying our ${coin} position by ${percentageChange.toFixed(1)}% (${modificationSize.toFixed(6)} units)`);
+      
+      // Call trade executor with MODIFY action
+      const action = isIncrease ? 'INCREASE' : 'DECREASE';
+      const tradeResult = await this.executeTrade(coin, modificationSize, action);
+      
+      if (tradeResult.success) {
+        const message = `✅ POSITION MODIFIED\n\n` +
+          `💰 Coin: ${coin}\n` +
+          `📊 Change: ${isIncrease ? '⬆️ Increased' : '⬇️ Decreased'} by ${Math.abs(percentageChange).toFixed(1)}%\n` +
+          `📏 Size Change: ${modificationSize.toFixed(6)} units\n` +
+          `💵 Fill Price: $${parseFloat(tradeResult.avg_price || 0).toFixed(4)}\n` +
+          `⏰ Time: ${new Date().toLocaleString()}`;
+        
+        await this.telegram.sendMessage(message);
+      } else {
+        await this.telegram.sendMessage(
+          `❌ Failed to modify ${coin} position: ${tradeResult.error}`
+        );
+      }
+    } catch (error) {
+      console.error(`❌ Error modifying position: ${error.message}`);
+      await this.telegram.sendMessage(
+        `❌ Error modifying ${coin} position: ${error.message}`
+      );
+    }
   }
 
   async handlePositionChange(oldPos, newPos) {

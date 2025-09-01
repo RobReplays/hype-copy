@@ -187,19 +187,50 @@ class TradeExecutor:
     
     def copy_trade(self, signal_coin, signal_size, action_type):
         """Execute a copy trade based on signal"""
-        signal_is_long = signal_size > 0
+        # For modifications, signal_size is already the modification amount
+        # For new/close, it's the full position size
         
-        if action_type in ["OPEN", "INCREASE"]:
-            # Open or increase position - same direction as signal
-            is_buy = signal_is_long
+        if action_type == "OPEN":
+            # New position - buy/sell based on direction
+            is_buy = signal_size > 0
+            return self.execute_market_order(signal_coin, is_buy, abs(signal_size), action_type)
+        elif action_type == "INCREASE":
+            # Increase existing position - same direction as current
+            # Need to check our current position direction
+            user_state = self.info.user_state(self.account.address)
+            positions = user_state.get("assetPositions", [])
+            my_pos = next((p for p in positions if p["position"]["coin"] == signal_coin), None)
+            
+            if my_pos and float(my_pos["position"]["szi"]) != 0:
+                is_buy = float(my_pos["position"]["szi"]) > 0
+            else:
+                # No position, treat as new
+                is_buy = signal_size > 0
+            
             return self.execute_market_order(signal_coin, is_buy, abs(signal_size), action_type)
         elif action_type == "DECREASE":
-            # Decrease position - opposite direction to signal
-            is_buy = not signal_is_long
+            # Decrease position - opposite direction to current
+            user_state = self.info.user_state(self.account.address)
+            positions = user_state.get("assetPositions", [])
+            my_pos = next((p for p in positions if p["position"]["coin"] == signal_coin), None)
+            
+            if my_pos and float(my_pos["position"]["szi"]) != 0:
+                is_buy = float(my_pos["position"]["szi"]) < 0  # Opposite
+            else:
+                return {"success": False, "error": "No position to decrease"}
+            
             return self.execute_market_order(signal_coin, is_buy, abs(signal_size), action_type)
         elif action_type == "CLOSE":
-            # Close entire position - opposite direction to signal
-            is_buy = not signal_is_long
+            # Close entire position - opposite direction to current
+            user_state = self.info.user_state(self.account.address)
+            positions = user_state.get("assetPositions", [])
+            my_pos = next((p for p in positions if p["position"]["coin"] == signal_coin), None)
+            
+            if my_pos and float(my_pos["position"]["szi"]) != 0:
+                is_buy = float(my_pos["position"]["szi"]) < 0  # Opposite
+            else:
+                return {"success": False, "error": "No position to close", "skipped": True}
+            
             return self.execute_market_order(signal_coin, is_buy, abs(signal_size), action_type)
         else:
             return {"success": False, "error": f"Unknown action type: {action_type}"}
