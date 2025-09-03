@@ -30,6 +30,9 @@ class PortfolioMirror {
       `💰 Mode: Portfolio Mirroring`
     );
 
+    // Load and display initial positions
+    await this.loadInitialPositions();
+
     // Initial portfolio check (will only message if rebalancing needed)
     await this.rebalancePortfolio();
 
@@ -43,6 +46,89 @@ class PortfolioMirror {
     if (this.rebalanceTimer) {
       clearInterval(this.rebalanceTimer);
       this.rebalanceTimer = null;
+    }
+  }
+
+  async loadInitialPositions() {
+    try {
+      console.log('📊 Loading initial positions...');
+      
+      // Get signal provider info
+      const signalInfo = await this.getAccountInfo(this.signalProviderAddress);
+      if (!signalInfo) {
+        await this.telegram.sendMessage('❌ Failed to load signal provider positions');
+        return;
+      }
+
+      // Get current prices
+      const priceResponse = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'allMids'
+      });
+      const prices = priceResponse.data;
+
+      // Get full position details for PnL
+      const response = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'clearinghouseState',
+        user: this.signalProviderAddress
+      });
+      
+      const positions = response.data.assetPositions || [];
+      const activePositions = positions.filter(p => 
+        p.position && Math.abs(parseFloat(p.position.szi)) > 0
+      );
+
+      if (activePositions.length > 0) {
+        let message = `📊 SIGNAL PROVIDER POSITIONS (${activePositions.length})\n\n`;
+        let totalPnl = 0;
+
+        for (const pos of activePositions) {
+          const coin = pos.position.coin;
+          const size = parseFloat(pos.position.szi);
+          const isLong = size > 0;
+          const entryPrice = parseFloat(pos.position.entryPx || 0);
+          const markPrice = prices[coin] || parseFloat(pos.position.markPx || 0);
+          const pnl = parseFloat(pos.position.unrealizedPnl || 0);
+          totalPnl += pnl;
+
+          message += `💰 ${coin}\n`;
+          message += `   📊 ${isLong ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(size).toFixed(4)}\n`;
+          message += `   💵 Entry: $${entryPrice.toFixed(4)}\n`;
+          message += `   💵 Mark: $${markPrice.toFixed(4)}\n`;
+          message += `   📈 PnL: $${pnl.toFixed(2)}\n\n`;
+        }
+
+        message += `💰 Signal Total PnL: $${totalPnl.toFixed(2)}\n\n`;
+        message += `🔍 Checking your positions...`;
+        
+        await this.telegram.sendMessage(message);
+      } else {
+        await this.telegram.sendMessage('📊 Signal provider has no active positions\n\n🔍 Monitoring for new trades...');
+      }
+
+      // Now show your positions
+      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
+      const myInfo = await this.getAccountInfo(wallet.address);
+      
+      if (myInfo && Object.keys(myInfo.positions).length > 0) {
+        let message = `📊 YOUR POSITIONS\n\n`;
+        
+        for (const [coin, pos] of Object.entries(myInfo.positions)) {
+          const isLong = pos.size > 0;
+          message += `💰 ${coin}: ${isLong ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(pos.size).toFixed(4)}\n`;
+        }
+        
+        message += `\n💰 Account Balance: $${myInfo.accountValue.toFixed(2)}`;
+        await this.telegram.sendMessage(message);
+      } else {
+        await this.telegram.sendMessage(
+          `📭 No active positions\n` +
+          `💰 Account Balance: $${myInfo?.accountValue?.toFixed(2) || '0.00'}`
+        );
+      }
+      
+    } catch (error) {
+      console.error('Error loading initial positions:', error.message);
+      await this.telegram.sendMessage('❌ Error loading initial positions');
     }
   }
 
