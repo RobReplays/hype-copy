@@ -21,6 +21,15 @@ class PortfolioMirror {
     console.log(`  Min difference: ${this.minRebalanceDiff * 100}%`);
     console.log(`  Max utilization: ${this.maxUtilization * 100}%`);
 
+    // Send startup message
+    await this.telegram.sendMessage(
+      '🚀 Hyperliquid Portfolio Mirror Started!\n\n' +
+      `📊 Monitoring: ${this.signalProviderAddress.slice(0, 6)}...${this.signalProviderAddress.slice(-4)}\n` +
+      `⏰ Rebalance Interval: ${this.rebalanceInterval / 60000} minutes\n` +
+      `📏 Min Difference: ${this.minRebalanceDiff * 100}%\n` +
+      `💰 Mode: Portfolio Mirroring`
+    );
+
     // Initial portfolio check
     await this.rebalancePortfolio();
 
@@ -34,6 +43,68 @@ class PortfolioMirror {
     if (this.rebalanceTimer) {
       clearInterval(this.rebalanceTimer);
       this.rebalanceTimer = null;
+    }
+  }
+
+  async sendDetailedPositions(signalInfo, myInfo) {
+    // Get current prices for better display
+    try {
+      const priceResponse = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'allMids'
+      });
+      const prices = priceResponse.data;
+
+      // Build signal provider positions message
+      const signalPositions = Object.entries(signalInfo.positions);
+      if (signalPositions.length > 0) {
+        let message = `📊 SIGNAL PROVIDER POSITIONS (${signalPositions.length})\n\n`;
+        let totalPnl = 0;
+
+        for (const [coin, pos] of signalPositions) {
+          const isLong = pos.size > 0;
+          const currentPrice = prices[coin] || pos.markPrice;
+          
+          message += `💰 ${coin}\n`;
+          message += `   📊 ${isLong ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(pos.size).toFixed(4)}\n`;
+          message += `   💵 Mark: $${currentPrice.toFixed(4)}\n`;
+          message += `   💰 Value: $${pos.value.toFixed(2)}\n\n`;
+        }
+
+        message += `💰 Total Value: $${signalInfo.totalPositionValue.toFixed(2)}\n`;
+        message += `📊 Utilization: ${(signalInfo.utilization * 100).toFixed(1)}%`;
+        
+        await this.telegram.sendMessage(message);
+      } else {
+        await this.telegram.sendMessage('📊 Signal provider has no active positions');
+      }
+
+      // Build your positions message
+      const myPositions = Object.entries(myInfo.positions);
+      if (myPositions.length > 0) {
+        let message = `📊 YOUR POSITIONS (${myPositions.length})\n\n`;
+
+        for (const [coin, pos] of myPositions) {
+          const isLong = pos.size > 0;
+          const currentPrice = prices[coin] || pos.markPrice;
+          
+          message += `💰 ${coin}\n`;
+          message += `   📊 ${isLong ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(pos.size).toFixed(4)}\n`;
+          message += `   💵 Mark: $${currentPrice.toFixed(4)}\n`;
+          message += `   💰 Value: $${pos.value.toFixed(2)}\n\n`;
+        }
+
+        message += `💰 Total Value: $${myInfo.totalPositionValue.toFixed(2)}\n`;
+        message += `💳 Account Balance: $${myInfo.accountValue.toFixed(2)}`;
+        
+        await this.telegram.sendMessage(message);
+      } else {
+        await this.telegram.sendMessage(
+          `📭 No active positions\n` +
+          `💰 Account Balance: $${myInfo.accountValue.toFixed(2)}`
+        );
+      }
+    } catch (error) {
+      console.error('Error sending detailed positions:', error.message);
     }
   }
 
@@ -109,6 +180,9 @@ class PortfolioMirror {
       console.log(`  Positions: $${myInfo.totalPositionValue.toFixed(2)}`);
       console.log(`  Utilization: ${(myInfo.utilization * 100).toFixed(1)}%`);
 
+      // Send detailed position breakdown
+      await this.sendDetailedPositions(signalInfo, myInfo);
+
       // Calculate target utilization (capped by maxUtilization)
       const targetUtilization = Math.min(signalInfo.utilization, this.maxUtilization);
       
@@ -162,13 +236,8 @@ class PortfolioMirror {
       } else {
         console.log('✅ Portfolio is balanced (within threshold)');
         
-        // Send periodic status update
-        const message = `📊 PORTFOLIO STATUS\n\n` +
-          `Signal Provider Utilization: ${(signalInfo.utilization * 100).toFixed(1)}%\n` +
-          `Your Utilization: ${(myInfo.utilization * 100).toFixed(1)}%\n` +
-          `\n✅ Portfolio is balanced`;
-        
-        await this.telegram.sendMessage(message);
+        // Portfolio is balanced - send status
+        console.log('Portfolio is balanced, no rebalancing needed');
       }
 
     } catch (error) {
@@ -180,17 +249,20 @@ class PortfolioMirror {
   async executeRebalancing(actions, accountValue) {
     console.log(`\n🔄 Executing ${actions.length} rebalancing actions...`);
 
-    let message = `🔄 PORTFOLIO REBALANCING\n\n`;
+    // Send initial rebalancing notification
+    let message = `🔄 PORTFOLIO REBALANCING STARTED\n\n`;
     message += `Account Value: $${accountValue.toFixed(2)}\n`;
-    message += `Actions: ${actions.length}\n\n`;
+    message += `Actions to execute: ${actions.length}\n\n`;
 
     for (const action of actions) {
       const { coin, currentValue, targetValue, valueDiff, isLong } = action;
+      const actionType = valueDiff > 0 ? 'BUY' : (targetValue === 0 ? 'CLOSE' : 'SELL');
 
       message += `${coin}:\n`;
       message += `  Current: $${currentValue.toFixed(2)}\n`;
       message += `  Target: $${targetValue.toFixed(2)}\n`;
-      message += `  Action: ${valueDiff > 0 ? '📈 BUY' : '📉 SELL'} $${Math.abs(valueDiff).toFixed(2)}\n\n`;
+      message += `  Action: ${actionType === 'BUY' ? '🟢 BUY' : actionType === 'CLOSE' ? '❌ CLOSE' : '🔴 SELL'} `;
+      message += `$${Math.abs(valueDiff).toFixed(2)}\n\n`;
 
       // Execute the trade
       await this.executeTrade(coin, valueDiff, targetValue, isLong);
@@ -250,12 +322,21 @@ class PortfolioMirror {
             if (result.success) {
               console.log(`✅ ${coin} rebalanced successfully`);
               
-              const tradeMessage = `✅ REBALANCE EXECUTED\n\n` +
+              // Determine action type based on position value
+              let actionType = 'ADJUSTED';
+              if (result.position_value == 0) {
+                actionType = 'CLOSED';
+              } else if (targetValue > currentValue * 1.5) {
+                actionType = 'OPENED';
+              }
+              
+              const tradeMessage = `✅ POSITION ${actionType}\n\n` +
                 `💰 Coin: ${coin}\n` +
                 `📊 Direction: ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
                 `📏 Size: ${result.executed_size} ${coin}\n` +
-                `💵 Price: $${result.avg_price}\n` +
-                `💰 Value: $${result.position_value}`;
+                `💵 Fill Price: $${result.avg_price}\n` +
+                `💰 Position Value: $${result.position_value}\n` +
+                `⏰ Time: ${new Date().toLocaleString()}`;
               
               await this.telegram.sendMessage(tradeMessage);
             } else {
