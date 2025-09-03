@@ -86,7 +86,7 @@ class PortfolioMirror {
           const size = parseFloat(pos.position.szi);
           const isLong = size > 0;
           const entryPrice = parseFloat(pos.position.entryPx || 0);
-          const markPrice = prices[coin] || parseFloat(pos.position.markPx || 0);
+          const markPrice = parseFloat(prices[coin] || pos.position.markPx || 0);
           const pnl = parseFloat(pos.position.unrealizedPnl || 0);
           totalPnl += pnl;
 
@@ -148,7 +148,7 @@ class PortfolioMirror {
 
         for (const [coin, pos] of signalPositions) {
           const isLong = pos.size > 0;
-          const currentPrice = prices[coin] || pos.markPrice;
+          const currentPrice = parseFloat(prices[coin] || pos.markPrice || 0);
           
           message += `💰 ${coin}\n`;
           message += `   📊 ${isLong ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(pos.size).toFixed(4)}\n`;
@@ -171,7 +171,7 @@ class PortfolioMirror {
 
         for (const [coin, pos] of myPositions) {
           const isLong = pos.size > 0;
-          const currentPrice = prices[coin] || pos.markPrice;
+          const currentPrice = parseFloat(prices[coin] || pos.markPrice || 0);
           
           message += `💰 ${coin}\n`;
           message += `   📊 ${isLong ? '🟢 LONG' : '🔴 SHORT'} ${Math.abs(pos.size).toFixed(4)}\n`;
