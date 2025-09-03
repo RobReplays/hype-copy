@@ -25,12 +25,12 @@ class PortfolioMirror {
     await this.telegram.sendMessage(
       '🚀 Hyperliquid Portfolio Mirror Started!\n\n' +
       `📊 Monitoring: ${this.signalProviderAddress.slice(0, 6)}...${this.signalProviderAddress.slice(-4)}\n` +
-      `⏰ Rebalance Interval: ${this.rebalanceInterval / 60000} minutes\n` +
+      `⏰ Check Interval: ${this.rebalanceInterval / 60000} minutes\n` +
       `📏 Min Difference: ${this.minRebalanceDiff * 100}%\n` +
       `💰 Mode: Portfolio Mirroring`
     );
 
-    // Initial portfolio check
+    // Initial portfolio check (will only message if rebalancing needed)
     await this.rebalancePortfolio();
 
     // Schedule periodic rebalancing
@@ -180,9 +180,6 @@ class PortfolioMirror {
       console.log(`  Positions: $${myInfo.totalPositionValue.toFixed(2)}`);
       console.log(`  Utilization: ${(myInfo.utilization * 100).toFixed(1)}%`);
 
-      // Send detailed position breakdown
-      await this.sendDetailedPositions(signalInfo, myInfo);
-
       // Calculate target utilization (capped by maxUtilization)
       const targetUtilization = Math.min(signalInfo.utilization, this.maxUtilization);
       
@@ -232,12 +229,22 @@ class PortfolioMirror {
 
       // Execute rebalancing if needed
       if (rebalanceActions.length > 0) {
-        await this.executeRebalancing(rebalanceActions, myInfo.accountValue);
-      } else {
-        console.log('✅ Portfolio is balanced (within threshold)');
+        // Send detailed positions before rebalancing
+        await this.sendDetailedPositions(signalInfo, myInfo);
         
-        // Portfolio is balanced - send status
-        console.log('Portfolio is balanced, no rebalancing needed');
+        // Execute the rebalancing
+        await this.executeRebalancing(rebalanceActions, myInfo.accountValue);
+        
+        // After rebalancing, fetch and show updated positions
+        setTimeout(async () => {
+          const updatedMyInfo = await this.getAccountInfo(wallet.address);
+          if (updatedMyInfo) {
+            await this.sendDetailedPositions(signalInfo, updatedMyInfo);
+          }
+        }, 3000); // Wait 3 seconds for positions to update
+      } else {
+        // Portfolio is balanced - no message, just log
+        console.log('✅ Portfolio is balanced (no changes needed)');
       }
 
     } catch (error) {
