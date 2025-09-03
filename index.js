@@ -1,5 +1,7 @@
 require('dotenv').config();
 const HyperliquidBot = require('./src/HyperliquidBot');
+const PortfolioMirror = require('./src/PortfolioMirror');
+const TelegramNotifier = require('./src/TelegramNotifier');
 const http = require('http');
 
 // Configuration from environment variables
@@ -81,8 +83,15 @@ async function main() {
     console.log(`📱 Chat ID: ${config.telegram.chatId}`);
     console.log(`⚙️  Sizing: ${config.sizingMethod} (${config.accountRatio}x)`);
     
-    // Create and start the bot
-    botInstance = new HyperliquidBot(config);
+    // Create appropriate bot instance based on sizing method
+    if (config.sizingMethod === 'portfolio_mirror') {
+      console.log('🔄 Using Portfolio Mirror mode');
+      const telegram = new TelegramNotifier(config.telegram);
+      botInstance = new PortfolioMirror(config, telegram);
+    } else {
+      console.log('📊 Using traditional copy trading mode');
+      botInstance = new HyperliquidBot(config);
+    }
     
     // Handle graceful shutdown - but DON'T exit on SIGTERM for Render
     const gracefulShutdown = async (signal) => {
