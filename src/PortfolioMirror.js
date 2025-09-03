@@ -163,10 +163,10 @@ class PortfolioMirror {
         console.log('✅ Portfolio is balanced (within threshold)');
         
         // Send periodic status update
-        const message = `📊 PORTFOLIO STATUS\\n\\n` +
-          `Signal Provider Utilization: ${(signalInfo.utilization * 100).toFixed(1)}%\\n` +
-          `Your Utilization: ${(myInfo.utilization * 100).toFixed(1)}%\\n` +
-          `\\n✅ Portfolio is balanced`;
+        const message = `📊 PORTFOLIO STATUS\n\n` +
+          `Signal Provider Utilization: ${(signalInfo.utilization * 100).toFixed(1)}%\n` +
+          `Your Utilization: ${(myInfo.utilization * 100).toFixed(1)}%\n` +
+          `\n✅ Portfolio is balanced`;
         
         await this.telegram.sendMessage(message);
       }
@@ -178,19 +178,19 @@ class PortfolioMirror {
   }
 
   async executeRebalancing(actions, accountValue) {
-    console.log(`\\n🔄 Executing ${actions.length} rebalancing actions...`);
+    console.log(`\n🔄 Executing ${actions.length} rebalancing actions...`);
 
-    let message = `🔄 PORTFOLIO REBALANCING\\n\\n`;
-    message += `Account Value: $${accountValue.toFixed(2)}\\n`;
-    message += `Actions: ${actions.length}\\n\\n`;
+    let message = `🔄 PORTFOLIO REBALANCING\n\n`;
+    message += `Account Value: $${accountValue.toFixed(2)}\n`;
+    message += `Actions: ${actions.length}\n\n`;
 
     for (const action of actions) {
       const { coin, currentValue, targetValue, valueDiff, isLong } = action;
 
-      message += `${coin}:\\n`;
-      message += `  Current: $${currentValue.toFixed(2)}\\n`;
-      message += `  Target: $${targetValue.toFixed(2)}\\n`;
-      message += `  Action: ${valueDiff > 0 ? '📈 BUY' : '📉 SELL'} $${Math.abs(valueDiff).toFixed(2)}\\n\\n`;
+      message += `${coin}:\n`;
+      message += `  Current: $${currentValue.toFixed(2)}\n`;
+      message += `  Target: $${targetValue.toFixed(2)}\n`;
+      message += `  Action: ${valueDiff > 0 ? '📈 BUY' : '📉 SELL'} $${Math.abs(valueDiff).toFixed(2)}\n\n`;
 
       // Execute the trade
       await this.executeTrade(coin, valueDiff, targetValue, isLong);
@@ -250,11 +250,11 @@ class PortfolioMirror {
             if (result.success) {
               console.log(`✅ ${coin} rebalanced successfully`);
               
-              const tradeMessage = `✅ REBALANCE EXECUTED\\n\\n` +
-                `💰 Coin: ${coin}\\n` +
-                `📊 Direction: ${isLong ? '🟢 LONG' : '🔴 SHORT'}\\n` +
-                `📏 Size: ${result.executed_size} ${coin}\\n` +
-                `💵 Price: $${result.avg_price}\\n` +
+              const tradeMessage = `✅ REBALANCE EXECUTED\n\n` +
+                `💰 Coin: ${coin}\n` +
+                `📊 Direction: ${isLong ? '🟢 LONG' : '🔴 SHORT'}\n` +
+                `📏 Size: ${result.executed_size} ${coin}\n` +
+                `💵 Price: $${result.avg_price}\n` +
                 `💰 Value: $${result.position_value}`;
               
               await this.telegram.sendMessage(tradeMessage);
