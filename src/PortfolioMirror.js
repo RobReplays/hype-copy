@@ -335,7 +335,7 @@ class PortfolioMirror {
           const percentDiff = Math.abs(valueDiff / myPos.value);
           
           if (percentDiff > this.minRebalanceDiff) {
-            console.log(`🔄 Position update: ${coin} (${percentDiff * 100:.1f}% change)`);
+            console.log(`🔄 Position update: ${coin} (${(percentDiff * 100).toFixed(1)}% change)`);
             
             rebalanceActions.push({
               coin,
