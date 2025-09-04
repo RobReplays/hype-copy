@@ -209,11 +209,18 @@ class PortfolioMirror {
       let totalPositionValue = 0;
       const positionDetails = {};
 
+      // Get current prices for accurate position values
+      const priceResponse = await axios.post('https://api.hyperliquid.xyz/info', {
+        type: 'allMids'
+      });
+      const prices = priceResponse.data || {};
+
       for (const pos of positions) {
         if (pos.position && parseFloat(pos.position.szi) !== 0) {
           const coin = pos.position.coin;
           const size = Math.abs(parseFloat(pos.position.szi));
-          const markPrice = parseFloat(pos.position.markPx || 0);
+          // Use market price first, fallback to mark price
+          const markPrice = parseFloat(prices[coin] || pos.position.markPx || 0);
           const positionValue = size * markPrice;
           
           totalPositionValue += positionValue;
@@ -298,7 +305,8 @@ class PortfolioMirror {
           : targetValue > 0 ? 1 : 0;
 
         // Check if rebalance needed (exceeds threshold or closing position)
-        if (percentDiff > this.minRebalanceDiff || (currentValue > 0 && targetValue === 0)) {
+        // ALWAYS close positions when signal provider has none
+        if ((currentValue > 0 && targetValue === 0) || percentDiff > this.minRebalanceDiff) {
           // Determine if signal is long or short
           const signalIsLong = signalPos.size > 0;
           
@@ -315,6 +323,14 @@ class PortfolioMirror {
 
       // Execute rebalancing if needed
       if (rebalanceActions.length > 0) {
+        console.log(`🎯 Rebalancing needed: ${rebalanceActions.length} actions`);
+        
+        // Check if any are closes
+        const closeActions = rebalanceActions.filter(a => a.targetValue === 0);
+        if (closeActions.length > 0) {
+          console.log(`❌ Closing ${closeActions.length} positions: ${closeActions.map(a => a.coin).join(', ')}`);
+        }
+        
         // Send detailed positions before rebalancing
         await this.sendDetailedPositions(signalInfo, myInfo);
         
