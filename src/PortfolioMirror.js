@@ -13,6 +13,9 @@ class PortfolioMirror {
     this.maxUtilization = parseFloat(process.env.MAX_UTILIZATION || 1.0); // 100% default
     this.lastRebalance = null;
     this.rebalanceTimer = null;
+    this.baselinePositions = new Set(); // Track positions that existed at startup
+    this.failedTrades = new Map(); // Track failed trades to avoid retrying
+    this.isFirstRun = true; // Flag to set baseline on first check
   }
 
   async start() {
@@ -59,6 +62,13 @@ class PortfolioMirror {
         await this.telegram.sendMessage('❌ Failed to load signal provider positions');
         return;
       }
+
+      // Mark all current positions as baseline
+      for (const coin in signalInfo.positions) {
+        this.baselinePositions.add(coin);
+        console.log(`  📌 ${coin}: Marked as baseline (won't auto-copy)`);
+      }
+      this.isFirstRun = false; // Already set baseline
 
       // Get current prices
       const priceResponse = await axios.post('https://api.hyperliquid.xyz/info', {
@@ -263,6 +273,18 @@ class PortfolioMirror {
         return;
       }
 
+      // On first run, set baseline positions and don't rebalance
+      if (this.isFirstRun) {
+        console.log('📸 Setting baseline positions (will ignore these)');
+        for (const coin in signalInfo.positions) {
+          this.baselinePositions.add(coin);
+          console.log(`  - ${coin}: Marked as baseline (won't copy)`);
+        }
+        this.isFirstRun = false;
+        console.log('✅ Baseline set. Will only copy NEW positions from now on.');
+        return; // Don't rebalance on first run
+      }
+
       console.log(`📊 Signal Provider:`);
       console.log(`  Account: $${signalInfo.accountValue.toFixed(2)}`);
       console.log(`  Positions: $${signalInfo.totalPositionValue.toFixed(2)}`);
@@ -286,37 +308,57 @@ class PortfolioMirror {
         ...Object.keys(myInfo.positions)
       ]);
 
+      // Only check for NEW coins (not in baseline) and CLOSES of our existing positions
       for (const coin of allCoins) {
         const signalPos = signalInfo.positions[coin] || { value: 0, size: 0 };
         const myPos = myInfo.positions[coin] || { value: 0, size: 0 };
 
-        // Calculate target based on signal's proportion
-        let targetValue = 0;
-        if (signalInfo.totalPositionValue > 0 && signalPos.value > 0) {
-          const proportion = signalPos.value / signalInfo.totalPositionValue;
-          targetValue = targetTotalValue * proportion;
-        }
-
-        // Calculate difference
-        const currentValue = myPos.value;
-        const valueDiff = targetValue - currentValue;
-        const percentDiff = currentValue > 0 
-          ? Math.abs(valueDiff / currentValue)
-          : targetValue > 0 ? 1 : 0;
-
-        // Check if rebalance needed (exceeds threshold or closing position)
-        // ALWAYS close positions when signal provider has none
-        if ((currentValue > 0 && targetValue === 0) || percentDiff > this.minRebalanceDiff) {
-          // Determine if signal is long or short
-          const signalIsLong = signalPos.size > 0;
+        // Case 1: NEW position from signal provider (not in baseline) 
+        if (!this.baselinePositions.has(coin) && signalPos.value > 0 && myPos.value === 0) {
+          console.log(`🆕 New position detected: ${coin}`);
+          const targetValue = (signalPos.value / signalInfo.totalPositionValue) * targetTotalValue;
           
           rebalanceActions.push({
             coin,
-            currentValue,
+            currentValue: myPos.value,
             targetValue,
-            valueDiff,
-            action: valueDiff > 0 ? 'INCREASE' : valueDiff < 0 ? 'DECREASE' : 'NONE',
-            isLong: signalIsLong
+            valueDiff: targetValue - myPos.value,
+            action: 'OPEN',
+            isLong: signalPos.size > 0
+          });
+        }
+        
+        // Case 2: Update existing position (if we already have one)
+        else if (myPos.value > 0 && signalPos.value > 0) {
+          const targetValue = (signalPos.value / signalInfo.totalPositionValue) * targetTotalValue;
+          const valueDiff = targetValue - myPos.value;
+          const percentDiff = Math.abs(valueDiff / myPos.value);
+          
+          if (percentDiff > this.minRebalanceDiff) {
+            console.log(`🔄 Position update: ${coin} (${percentDiff * 100:.1f}% change)`);
+            
+            rebalanceActions.push({
+              coin,
+              currentValue: myPos.value,
+              targetValue,
+              valueDiff,
+              action: valueDiff > 0 ? 'INCREASE' : 'DECREASE',
+              isLong: signalPos.size > 0
+            });
+          }
+        }
+        
+        // Case 3: CLOSE our position if signal provider closed theirs
+        else if (myPos.value > 0 && signalPos.value === 0) {
+          console.log(`❌ Position to close: ${coin}`);
+          
+          rebalanceActions.push({
+            coin,
+            currentValue: myPos.value,
+            targetValue: 0,
+            valueDiff: -myPos.value,
+            action: 'CLOSE',
+            isLong: myPos.size > 0
           });
         }
       }
@@ -331,19 +373,12 @@ class PortfolioMirror {
           console.log(`❌ Closing ${closeActions.length} positions: ${closeActions.map(a => a.coin).join(', ')}`);
         }
         
-        // Send detailed positions before rebalancing
-        await this.sendDetailedPositions(signalInfo, myInfo);
+        // Execute the rebalancing (will only send messages if successful)
+        const success = await this.executeRebalancing(rebalanceActions, myInfo.accountValue, signalInfo, myInfo);
         
-        // Execute the rebalancing
-        await this.executeRebalancing(rebalanceActions, myInfo.accountValue);
-        
-        // After rebalancing, fetch and show updated positions
-        setTimeout(async () => {
-          const updatedMyInfo = await this.getAccountInfo(wallet.address);
-          if (updatedMyInfo) {
-            await this.sendDetailedPositions(signalInfo, updatedMyInfo);
-          }
-        }, 3000); // Wait 3 seconds for positions to update
+        if (!success) {
+          console.log('⚠️ Rebalancing failed - will retry next check');
+        }
       } else {
         // Portfolio is balanced - no message, just log
         console.log('✅ Portfolio is balanced (no changes needed)');
@@ -355,33 +390,51 @@ class PortfolioMirror {
     }
   }
 
-  async executeRebalancing(actions, accountValue) {
+  async executeRebalancing(actions, accountValue, signalInfo, myInfo) {
     console.log(`\n🔄 Executing ${actions.length} rebalancing actions...`);
-
-    // Send initial rebalancing notification
-    let message = `🔄 PORTFOLIO REBALANCING STARTED\n\n`;
-    message += `Account Value: $${accountValue.toFixed(2)}\n`;
-    message += `Actions to execute: ${actions.length}\n\n`;
+    let successCount = 0;
+    let failedActions = [];
 
     for (const action of actions) {
       const { coin, currentValue, targetValue, valueDiff, isLong } = action;
-      const actionType = valueDiff > 0 ? 'BUY' : (targetValue === 0 ? 'CLOSE' : 'SELL');
-
-      message += `${coin}:\n`;
-      message += `  Current: $${currentValue.toFixed(2)}\n`;
-      message += `  Target: $${targetValue.toFixed(2)}\n`;
-      message += `  Action: ${actionType === 'BUY' ? '🟢 BUY' : actionType === 'CLOSE' ? '❌ CLOSE' : '🔴 SELL'} `;
-      message += `$${Math.abs(valueDiff).toFixed(2)}\n\n`;
-
+      
       // Execute the trade
-      await this.executeTrade(coin, valueDiff, targetValue, isLong);
+      const result = await this.executeTrade(coin, valueDiff, targetValue, isLong);
+      
+      if (result && result.success) {
+        successCount++;
+      } else {
+        failedActions.push(coin);
+      }
       
       // Small delay between trades
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    message += `⏰ Next check in ${this.rebalanceInterval / 60000} minutes`;
-    await this.telegram.sendMessage(message);
+    // Only send messages if we had successful trades
+    if (successCount > 0) {
+      // Send positions before message
+      await this.sendDetailedPositions(signalInfo, myInfo);
+      
+      // Send success summary
+      await this.telegram.sendMessage(
+        `✅ REBALANCING COMPLETE\n\n` +
+        `Successful trades: ${successCount}/${actions.length}\n` +
+        `${failedActions.length > 0 ? `Failed: ${failedActions.join(', ')}\n` : ''}` +
+        `⏰ Next check in ${this.rebalanceInterval / 60000} minutes`
+      );
+      
+      // Get updated positions after trades
+      setTimeout(async () => {
+        const wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
+        const updatedMyInfo = await this.getAccountInfo(wallet.address);
+        if (updatedMyInfo) {
+          await this.sendDetailedPositions(signalInfo, updatedMyInfo);
+        }
+      }, 3000);
+    }
+    
+    return successCount > 0;
   }
 
   async executeTrade(coin, valueDiff, targetValue, isLong) {
